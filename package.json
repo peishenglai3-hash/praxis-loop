@@ -1,0 +1,20 @@
+{
+  "name": "praxis-loop",
+  "version": "0.1.0",
+  "private": false,
+  "description": "A local-first runtime for revisable human-AI task decisions.",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=24.15.0 <25" },
+  "packageManager": "pnpm@11.19.0",
+  "bin": { "praxis-loop": "dist/cli.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/cli.js"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "typescript": "5.9.3"
+  }
+}
