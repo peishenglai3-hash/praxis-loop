@@ -29,6 +29,10 @@ Before collecting results:
 
 The Linux marker record can be a small JSON object such as {"schemaVersion":1,"studyId":"example-study","dedicatedVm":true,"noHostMounts":true,"networkRestricted":true}. Install it from the guest administrator account with root ownership and mode 0644, then run the evaluator only as the unprivileged study user. The marker records the VM operator's setup; it does not verify or enforce that setup. The Windows wrapper verifies its AppContainer token and Job Object before resume, checks a host-only file and loopback denial, and keeps the workspace/evidence inside a fresh temporary root.
 
+For deterministic mechanism checks, `.github/workflows/isolated-mechanism.yml` uses a standard GitHub-hosted `ubuntu-24.04` job, which is a fresh VM per job. It checks out without persisted credentials, prepares dependencies and the build image before starting tests, then runs the test process as UID 10001 in a read-only Docker image with `--network none`, no runtime bind mounts, no capabilities, and bounded CPU, memory, processes, and temporary storage. The host wrapper verifies Docker reports network mode `none` and zero host bind/volume mounts before starting tests; it copies only generated test evidence after the container exits. This profile covers the no-model mechanism suite. It is not a task-quality or model-generalization study, and it does not authorize exposing provider credentials to the test container.
+
+This CI mechanism profile caps the container at 2 vCPU, 4 GiB memory, 64 processes, 1 GiB temporary storage, and 256 MiB home storage; it is not used for the stability/soak stage. The hosted runner remains outside the container only to provision the image, verify isolation settings, collect artifacts after process exit, and report the workflow result.
+
 If neither sandbox profile can be established, stop before runtime or model-backed work. On Windows, do not invoke the ordinary pnpm runtime-test commands on the host; use the explicit AppContainer wrapper for its documented offline subset. WSL without a dedicated VM and a host marker do not satisfy the model-stage gate.
 
 ### 1. Deterministic mechanism checks
@@ -121,5 +125,5 @@ The evaluator writes one bounded log and hash-bearing manifest per invocation. T
 - Windows AppContainer mechanism evidence: the search/retrieval and store subset passed 16/16 tests. Adapter and runner suites remain unverified after a redirected-child-process stall in the isolated container.
 - Windows bounded stability: 1,000 memory cycles, 10 reopens, and 11 SQLite checks passed after an optimization to 10k-memory projection validation. This single local profile remains partial.
 - Windows state-only soak: the one-hour cycle phase completed and SQLite integrity checks passed. Its longest recorded write interval spans host sleep and is excluded from application latency evidence. The run remains partial.
-- Linux VM isolated scenarios, six-task/model evaluation, cross-project integration, and long-horizon task-quality evidence remain pending. No model calls were made in the completed Windows probes.
+- The GitHub-hosted Linux mechanism workflow is configured; its first run is pending. Six-task/model evaluation, cross-project integration, and long-horizon task-quality evidence remain pending. No model calls were made in the completed Windows probes.
 - The exact sanitized results, limits, and timing correction are frozen in [FROZEN-TEST-REFERENCE-2026-11-24.md](FROZEN-TEST-REFERENCE-2026-11-24.md); private raw logs are not stored in Git.

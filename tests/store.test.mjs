@@ -1,4 +1,3 @@
-// NOT EXECUTED: these regression cases require the dedicated, unprivileged Linux VM.
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

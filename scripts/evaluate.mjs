@@ -139,8 +139,10 @@ const snapshotCleanAfter = sourceSnapshotSha256 === sourceSnapshotSha256After;
 const subprocessCoverageExcluded = windowsAppContainer && mode !== 'mechanism'
   ? 'Adapter child spawn with redirected stdio stalled inside this AppContainer; no command-lifecycle cycles were attempted.'
   : null;
+const repositoryHead = process.env.PRAXIS_LOOP_SOURCE_COMMIT || null;
+if (repositoryHead && !/^[0-9a-f]{40,64}$/iu.test(repositoryHead)) throw new Error('Invalid source commit in sandbox environment');
 const manifest = { schemaVersion: 2, mode, startedAt, endedAt: new Date().toISOString(), sandbox, node: process.version,
-  platform: process.platform, arch: process.arch, repositoryHead: null,
+  platform: process.platform, arch: process.arch, repositoryHead,
   testCoverage: { executedTestFiles: mode === 'mechanism' ? files : [],
     excludedTestFiles, subprocessCoverageExcluded,
     exclusionReason: excludedTestFiles.length > 0

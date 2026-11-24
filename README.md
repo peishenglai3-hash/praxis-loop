@@ -99,9 +99,9 @@ Model-backed and full process-runner tests require the dedicated Linux VM descri
 - **`scripts/run-windows-appcontainer.ps1 -Mode stability`** runs 1000 bounded local cycles without child-process samples; the host Job Object records evaluator handles, active-process count, and peak memory. This is not a VM or full command-lifecycle validation. The first completed profile exposed a quadratic FTS projection check; the linear validation fix reduced 10k-memory reopen time from 24.96 s to 0.58 s mean.
 - **`scripts/run-windows-appcontainer.ps1 -Mode soak`** is a one-hour exploratory state-only soak when the full Stage 1 gate is unavailable. Its result is partial and does not close the full endurance gate.
 
-The first Windows soak completed its one-hour cycle phase with valid SQLite checks, but recorded one unexplained 50-minute synchronous write during the 10k-memory seed. See [the issue ledger](docs/ISSUE-LEDGER.md) before treating that profile as endurance evidence.
+The Windows soak completed its one-hour cycle phase with valid SQLite checks. A reported 2,999.6 s seed write coincides with host sleep and is classified as timer contamination, not a SQLite stall; see the [frozen report](docs/FROZEN-TEST-REFERENCE-2026-11-24.md).
 
-The stability and soak scripts use throwaway local state and make no model calls. The AppContainer sandbox shares the Windows kernel and does not claim VM-level isolation. The CI workflow continues to run static checks and a production TypeScript build.
+The stability and soak scripts use throwaway state and make no model calls. The Windows AppContainer shares the host kernel and does not claim VM-level isolation. The CI workflow builds the package, then runs the full deterministic mechanism suite inside a networkless, unprivileged container on a fresh GitHub-hosted Linux VM.
 
 ## License
 
@@ -110,3 +110,7 @@ MIT. See [LICENSE](LICENSE).
 ## Frozen Windows test reference
 
 The 2026-11-24 Windows AppContainer subset, bounded stability, and exploratory soak results are frozen on branch `codex/freeze-windows-tests-20261124` and tag `reference/windows-tests-2026-11-24`. See [the report](docs/FROZEN-TEST-REFERENCE-2026-11-24.md) and [sanitized summary](test-evidence/reference-2026-11-24/summary.json). The sleep-contaminated timing was corrected; full runner and model stages remain open.
+
+## Isolated tests
+
+The deterministic mechanism suite uses the guarded launch path. On Windows, `pnpm test` invokes the AppContainer wrapper and runs only its documented offline subset. On Linux, run `bash scripts/run-linux-isolated.sh` from the repository root; the script builds a pinned Node image, then runs tests with network disabled, no host bind mounts, a read-only source tree, and resource limits. GitHub Actions executes this workflow on a fresh `ubuntu-24.04` VM and uploads the bounded evidence artifact. The workflow does not call a model or inject expected answers/labels. Model-backed and long-horizon evaluations remain gated separately.
