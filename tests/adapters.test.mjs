@@ -221,7 +221,7 @@ test('Codex adapter forwards argv/stdin to an offline fixture and collects its f
     const result = await new CodexAdapter().generate({
       purpose: 'explore', prompt: '证据 $HOME ; 保持原样', cwd: directory, writable: false, timeoutMs: 5_000,
     });
-    assert.equal(result.exitCode, 0);
+    assert.equal(result.exitCode, 0, JSON.stringify(result, null, 2));
     const message = JSON.parse(result.stdout);
     assert.equal(message.args[0], 'exec');
     assert.equal(message.args[message.args.indexOf('--sandbox') + 1], 'read-only');
