@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .praxis-loop/
+/test-evidence/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+.test-artifacts/

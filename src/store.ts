@@ -9,6 +9,21 @@ interface MemoryRow {
 }
 interface EventRow { seq: number; id: string; repository_id: string; type: string; payload_json: string }
 
+const memoryProjectionSql = `
+  CREATE TABLE IF NOT EXISTS current_memories (
+    id TEXT PRIMARY KEY, repository_id TEXT NOT NULL, kind TEXT NOT NULL,
+    body TEXT NOT NULL, search_terms TEXT NOT NULL, source_event_ids TEXT NOT NULL,
+    status TEXT NOT NULL, created_at TEXT NOT NULL, revised_from TEXT,
+    source_event_id TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS memory_scopes (
+    memory_id TEXT NOT NULL REFERENCES current_memories(id) ON DELETE CASCADE,
+    repository_id TEXT NOT NULL, PRIMARY KEY(memory_id, repository_id)
+  ) STRICT;
+  CREATE INDEX IF NOT EXISTS current_memories_repo_status ON current_memories(repository_id, status);
+`;
+const memoryFtsSql = "CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(memory_id UNINDEXED, search_terms, tokenize = 'unicode61 tokenchars ''_''');";
+
 export class PraxisStore {
   readonly db: DatabaseSync;
   readonly databasePath: string;
@@ -30,27 +45,17 @@ export class PraxisStore {
         revision INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL, diff_hash TEXT
       ) STRICT;
-      CREATE TABLE IF NOT EXISTS current_memories (
-        id TEXT PRIMARY KEY, repository_id TEXT NOT NULL, kind TEXT NOT NULL,
-        body TEXT NOT NULL, search_terms TEXT NOT NULL, source_event_ids TEXT NOT NULL,
-        status TEXT NOT NULL, created_at TEXT NOT NULL, revised_from TEXT,
-        source_event_id TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS memory_scopes (
-        memory_id TEXT NOT NULL REFERENCES current_memories(id) ON DELETE CASCADE,
-        repository_id TEXT NOT NULL, PRIMARY KEY(memory_id, repository_id)
-      ) STRICT;
       CREATE TABLE IF NOT EXISTS projection_state (
         name TEXT PRIMARY KEY, last_seq INTEGER NOT NULL
       ) STRICT;
       CREATE TABLE IF NOT EXISTS store_meta (
         key TEXT PRIMARY KEY, value TEXT NOT NULL
       ) STRICT;
-      CREATE INDEX IF NOT EXISTS current_memories_repo_status ON current_memories(repository_id, status);
+      ${memoryProjectionSql}
     `);
     let ftsAvailable = true;
     try {
-      this.db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(memory_id UNINDEXED, search_terms, tokenize = 'unicode61 tokenchars ''_''');");
+      this.db.exec(memoryFtsSql);
     } catch {
       ftsAvailable = false;
     }
@@ -60,6 +65,19 @@ export class PraxisStore {
   }
 
   close(): void { this.db.close(); }
+
+  /** Recreate only disposable memory projections; the event ledger and runs are preserved. */
+  rebuildMemoryProjectionFromEvents(): void {
+    this.transaction(() => {
+      if (this.ftsAvailable) this.db.exec("DROP TABLE IF EXISTS memories_fts");
+      this.db.exec("DROP TABLE IF EXISTS memory_scopes; DROP TABLE IF EXISTS current_memories;");
+      this.db.exec(memoryProjectionSql);
+      if (this.ftsAvailable) this.db.exec(memoryFtsSql);
+      this.db.prepare("DELETE FROM projection_state WHERE name = 'memories'").run();
+      this.replayMemoryEvents(0);
+      this.recordSearchProjectionVersion();
+    });
+  }
 
   private transaction<T>(operation: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
@@ -150,6 +168,8 @@ export class PraxisStore {
       const existing = this.db.prepare("SELECT id, repository_id, source_event_id FROM current_memories WHERE id = ? AND status IN ('active', 'candidate')").get(id) as { id: string; repository_id: string; source_event_id: string } | undefined;
       if (!existing) throw new Error(`No active memory with id ${id}`);
       if (input.repositoryId !== existing.repository_id) throw new Error("A memory can only be revised within its source repository");
+      if (input.applicableRepositoryIds.some((scope) => scope !== input.repositoryId)) throw new Error("Memory scope is limited to its source repository in this release");
+      if (input.sourceEventIds.includes(existing.source_event_id)) throw new Error("A replacement memory cannot depend on the memory it supersedes");
       this.validateMemorySources(input.repositoryId, input.sourceEventIds);
       if (!input.body.trim() || Buffer.byteLength(input.body, "utf8") > 16 * 1024) throw new Error("Memory body must be non-empty and at most 16 KiB");
       const event = this.insertEvent(input.repositoryId, "memory.revision", { supersedes: id, memory: input });
@@ -164,8 +184,7 @@ export class PraxisStore {
       const row = this.db.prepare("SELECT repository_id, search_terms FROM current_memories WHERE id = ? AND status = 'candidate'").get(id) as { repository_id: string; search_terms: string } | undefined;
       if (!row) throw new Error(`No candidate memory with id ${id}`);
       const event = this.insertEvent(row.repository_id, "memory.approved", { memoryId: id });
-      this.db.prepare("UPDATE current_memories SET status = 'active' WHERE id = ?").run(id);
-      if (this.ftsAvailable) this.db.prepare("INSERT INTO memories_fts(memory_id, search_terms) VALUES(?, ?)").run(id, row.search_terms);
+      this.approveProjectedMemory(id, row.repository_id);
       this.advanceProjection(event.seq);
     });
   }
@@ -246,11 +265,23 @@ export class PraxisStore {
 
   private projectMemory(input: MemoryInput & { sourceEventId: string }): void {
     const searchTerms = buildSearchTerms(input.body);
+    const status = this.hasInvalidMemorySources(input.repositoryId, input.sourceEventIds) ? "revoked" : input.status ?? "active";
     this.db.prepare("INSERT INTO current_memories(id, repository_id, kind, body, search_terms, source_event_ids, status, created_at, revised_from, source_event_id) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(input.id, input.repositoryId, input.kind, input.body, searchTerms, JSON.stringify(input.sourceEventIds), input.status ?? "active", input.createdAt, input.revisedFrom ?? null, input.sourceEventId);
+      .run(input.id, input.repositoryId, input.kind, input.body, searchTerms, JSON.stringify(input.sourceEventIds), status, input.createdAt, input.revisedFrom ?? null, input.sourceEventId);
     const scopes = new Set(input.applicableRepositoryIds.length > 0 ? input.applicableRepositoryIds : [input.repositoryId]);
     for (const scope of scopes) this.db.prepare("INSERT INTO memory_scopes(memory_id, repository_id) VALUES(?, ?)").run(input.id, scope);
-    if (this.ftsAvailable && (input.status ?? "active") === "active") this.db.prepare("INSERT INTO memories_fts(memory_id, search_terms) VALUES(?, ?)").run(input.id, searchTerms);
+    if (this.ftsAvailable && status === "active") this.db.prepare("INSERT INTO memories_fts(memory_id, search_terms) VALUES(?, ?)").run(input.id, searchTerms);
+  }
+
+  private approveProjectedMemory(memoryId: string, repositoryId: string): void {
+    const row = this.db.prepare("SELECT search_terms FROM current_memories WHERE id = ? AND repository_id = ? AND status = 'candidate'")
+      .get(memoryId, repositoryId) as { search_terms: string } | undefined;
+    if (!row) return; // Duplicate approvals cannot reactivate revoked or superseded memories.
+    this.db.prepare("UPDATE current_memories SET status = 'active' WHERE id = ?").run(memoryId);
+    if (this.ftsAvailable) {
+      this.db.prepare("DELETE FROM memories_fts WHERE memory_id = ?").run(memoryId);
+      this.db.prepare("INSERT INTO memories_fts(memory_id, search_terms) VALUES(?, ?)").run(memoryId, row.search_terms);
+    }
   }
 
   private validateMemorySources(repositoryId: string, sourceEventIds: string[]): void {
@@ -259,6 +290,15 @@ export class PraxisStore {
     const placeholders = sourceEventIds.map(() => "?").join(",");
     const count = Number((this.db.prepare(`SELECT COUNT(*) AS count FROM events WHERE repository_id = ? AND id IN (${placeholders})`).get(repositoryId, ...sourceEventIds) as { count: number }).count);
     if (count !== sourceEventIds.length) throw new Error("Each memory source must be an existing event from the same repository");
+    if (this.hasInvalidMemorySources(repositoryId, sourceEventIds)) throw new Error("Memory sources cannot refer to revoked or superseded memories");
+  }
+
+  private hasInvalidMemorySources(repositoryId: string, sourceEventIds: string[]): boolean {
+    if (sourceEventIds.length === 0) return false;
+    const placeholders = sourceEventIds.map(() => "?").join(",");
+    return this.db.prepare(`SELECT 1 FROM current_memories WHERE repository_id = ?
+      AND status IN ('revoked', 'superseded') AND source_event_id IN (${placeholders}) LIMIT 1`)
+      .get(repositoryId, ...sourceEventIds) !== undefined;
   }
 
   private revokeProjectedMemory(memoryId: string, sourceEventId: string): void {
@@ -293,29 +333,37 @@ export class PraxisStore {
   }
 
   private rebuildMemoryProjection(): void {
-    const cursorRow = this.db.prepare("SELECT last_seq FROM projection_state WHERE name = 'memories'").get() as { last_seq: number } | undefined;
-    const cursor = cursorRow?.last_seq ?? 0;
-    const events = this.db.prepare("SELECT seq, id, repository_id, type, payload_json FROM events WHERE seq > ? AND type IN ('memory.decision', 'memory.created', 'memory.revision', 'memory.revoke') ORDER BY seq")
-      .all(cursor) as unknown as EventRow[];
-    if (events.length === 0) return;
     this.transaction(() => {
-      for (const event of events) {
-        const payload = JSON.parse(event.payload_json) as Record<string, unknown>;
-        if (event.type === "memory.decision" || event.type === "memory.created") {
-          const input = payload as unknown as MemoryInput;
-          this.projectMemory({ ...input, kind: input.kind ?? "decision", status: input.status ?? "active", sourceEventIds: [...new Set([...(input.sourceEventIds ?? []), event.id])], sourceEventId: event.id });
-        } else if (event.type === "memory.revision") {
-          const memory = payload.memory as MemoryInput;
-          const oldId = String(payload.supersedes);
-          const old = this.db.prepare("SELECT source_event_id FROM current_memories WHERE id = ?").get(oldId) as { source_event_id: string } | undefined;
-          this.supersedeProjectedMemory(oldId, old?.source_event_id ?? "");
-          this.projectMemory({ ...memory, kind: memory.kind ?? "decision", status: memory.status ?? "active", sourceEventIds: [...new Set([...(memory.sourceEventIds ?? []), event.id])], revisedFrom: oldId, sourceEventId: event.id });
-        } else {
-          this.revokeProjectedMemory(String(payload.memoryId), String(payload.sourceEventId));
-        }
-        this.advanceProjection(event.seq);
-      }
+      const cursorRow = this.db.prepare("SELECT last_seq FROM projection_state WHERE name = 'memories'").get() as { last_seq: number } | undefined;
+      this.replayMemoryEvents(cursorRow?.last_seq ?? 0);
     });
+  }
+
+  private replayMemoryEvents(cursor: number): void {
+    const events = this.db.prepare("SELECT seq, id, repository_id, type, payload_json FROM events WHERE seq > ? AND type IN ('memory.decision', 'memory.created', 'memory.revision', 'memory.revoke', 'memory.approved') ORDER BY seq")
+      .all(cursor) as unknown as EventRow[];
+    for (const event of events) {
+      const payload = JSON.parse(event.payload_json) as Record<string, unknown>;
+      if (event.type === "memory.decision" || event.type === "memory.created") {
+        const input = payload as unknown as MemoryInput;
+        this.projectMemory({ ...input, kind: input.kind ?? "decision", status: input.status ?? "active", sourceEventIds: [...new Set([...(input.sourceEventIds ?? []), event.id])], sourceEventId: event.id });
+      } else if (event.type === "memory.revision") {
+        const memory = payload.memory as MemoryInput;
+        const oldId = String(payload.supersedes);
+        const old = this.db.prepare("SELECT source_event_id FROM current_memories WHERE id = ?").get(oldId) as { source_event_id: string } | undefined;
+        this.supersedeProjectedMemory(oldId, old?.source_event_id ?? "");
+        this.projectMemory({ ...memory, kind: memory.kind ?? "decision", status: memory.status ?? "active", sourceEventIds: [...new Set([...(memory.sourceEventIds ?? []), event.id])], revisedFrom: oldId, sourceEventId: event.id });
+      } else if (event.type === "memory.approved") {
+        this.approveProjectedMemory(String(payload.memoryId), event.repository_id);
+      } else {
+        this.revokeProjectedMemory(String(payload.memoryId), String(payload.sourceEventId));
+      }
+      this.advanceProjection(event.seq);
+    }
+  }
+
+  private recordSearchProjectionVersion(): void {
+    this.db.prepare("INSERT INTO store_meta(key, value) VALUES('search_terms_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(SEARCH_TERMS_VERSION);
   }
 
   private rebuildSearchProjection(): void {
@@ -324,17 +372,22 @@ export class PraxisStore {
     const staleTerms = version !== SEARCH_TERMS_VERSION || active.some((row) => row.search_terms !== buildSearchTerms(row.body));
     let staleFts = false;
     if (this.ftsAvailable) {
-      const actual = Number((this.db.prepare("SELECT COUNT(*) AS count FROM memories_fts").get() as { count: number }).count);
-      const missingOrChanged = Number((this.db.prepare("SELECT COUNT(*) AS count FROM current_memories m LEFT JOIN memories_fts f ON f.memory_id = m.id WHERE m.status = 'active' AND (f.memory_id IS NULL OR f.search_terms != m.search_terms)").get() as { count: number }).count);
-      const orphaned = Number((this.db.prepare("SELECT COUNT(*) AS count FROM memories_fts f LEFT JOIN current_memories m ON m.id = f.memory_id WHERE m.id IS NULL OR m.status != 'active'").get() as { count: number }).count);
-      staleFts = actual !== active.length || missingOrChanged > 0 || orphaned > 0;
+      // memory_id is deliberately UNINDEXED in FTS5. Joining it back to
+      // current_memories makes rebuild validation quadratic as history grows.
+      // Read the bounded projection once and compare IDs/terms in linear time.
+      const ftsRows = this.db.prepare("SELECT memory_id, search_terms FROM memories_fts").all() as Array<{ memory_id: string; search_terms: string }>;
+      const activeTerms = new Map(active.map((row) => [row.id, row.search_terms]));
+      const indexedTerms = new Map(ftsRows.map((row) => [row.memory_id, row.search_terms]));
+      staleFts = ftsRows.length !== active.length ||
+        active.some((row) => indexedTerms.get(row.id) !== row.search_terms) ||
+        ftsRows.some((row) => activeTerms.get(row.memory_id) !== row.search_terms);
     }
     if (!staleTerms && !staleFts) return;
     this.transaction(() => {
       if (staleTerms) {
         const rows = this.db.prepare("SELECT id, body FROM current_memories").all() as Array<{ id: string; body: string }>;
         for (const row of rows) this.db.prepare("UPDATE current_memories SET search_terms = ? WHERE id = ?").run(buildSearchTerms(row.body), row.id);
-        this.db.prepare("INSERT INTO store_meta(key, value) VALUES('search_terms_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(SEARCH_TERMS_VERSION);
+        this.recordSearchProjectionVersion();
       }
       if (this.ftsAvailable) {
         this.db.exec("DELETE FROM memories_fts;");

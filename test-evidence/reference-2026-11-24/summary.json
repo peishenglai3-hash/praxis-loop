@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "studyId": "PL-WIN-2026-11-24",
+  "repository": "peishenglai3-hash/praxis-loop",
+  "sourceCommitBeforeFreeze": "070c538c055efc355c48277b950f1a4b0755b249",
+  "sourceSnapshotSha256": "eef9fa2af5e1a569463e06e22e9e9638e4881772aa8b8811d5d2eea0ff785d00",
+  "runtime": { "node": "24.15.0", "pnpm": "11.19.0", "platform": "Windows x64 AppContainer" },
+  "modelCalls": 0,
+  "sandbox": {
+    "kind": "Windows AppContainer",
+    "networkCapabilities": 0,
+    "killOnCloseJobObject": true,
+    "hostSentinelDenied": true,
+    "loopbackDenied": true,
+    "descendantCleanupProbe": "passed",
+    "externalEgressIndependentlyTested": false
+  },
+  "runs": [
+    {
+      "runId": "windows-mechanism-472a6e8aa73f4e7fbc0aedf9b2b76988",
+      "status": "partial",
+      "files": ["search-exploration.test.mjs", "store.test.mjs"],
+      "passed": 16,
+      "failed": 0,
+      "excluded": ["adapters.test.mjs", "runner.test.mjs"],
+      "exclusion": "redirected child-process spawn stalled in AppContainer; excluded suites remain unverified",
+      "sourceSnapshotSha256": "eef9fa2af5e1a569463e06e22e9e9638e4881772aa8b8811d5d2eea0ff785d00",
+      "runnerLogSha256": "70308b470d746c3d5561a1cc5f6d045adf488ca62ee7961100b54ebaa7a5d4db"
+    },
+    {
+      "runId": "windows-stability-f2843e37178d4d70b617e15986866cf1",
+      "status": "partial",
+      "cycles": 1000,
+      "storeReopens": 10,
+      "sqliteChecks": 11,
+      "elapsedMs": 228674,
+      "reopenMeanMs": 579,
+      "reopenRangeMs": [467, 691],
+      "searchMeanMs": 25.15,
+      "searchP95Ms": 28.25,
+      "processRssPeakBytes": 190132224,
+      "jobMemoryPeakBytes": 245215232,
+      "openHandlesPeak": 183,
+      "activeProcessesPeak": 1,
+      "databaseBytes": 17633280,
+      "walBytes": 0,
+      "runnerManifestSha256": "D5F7877FDFC5F6FEF05A91E9EE632BDE18C06CCDDB729515E5E26C5A38FD3440"
+    },
+    {
+      "runId": "windows-soak-6d7e85aa02c84360b78137fc187c6c26",
+      "status": "partial",
+      "cycles": 3570,
+      "cyclePhaseMs": 3600608,
+      "storeReopens": 3,
+      "events": 23570,
+      "memories": 10000,
+      "sqliteQuickChecks": 3,
+      "sqliteIntegrityChecks": 1,
+      "sqliteChecksPassed": true,
+      "processRssPeakBytes": 166764544,
+      "jobMemoryPeakBytes": 241115136,
+      "openHandlesPeak": 184,
+      "activeProcessesPeak": 1,
+      "databaseBytes": 18083840,
+      "walBytes": 4128272,
+      "reportedMaximumWriteMs": 2999602,
+      "timingClassification": "host sleep interval included by QueryPerformanceCounter; not application write latency evidence",
+      "hostTelemetryGapMs": 2998418.5109,
+      "runnerManifestSha256": "FB32BFA3F5A013791F09A69E7A3447E85BFB070E66150BE99B1A29AA2B0CFB9E",
+      "hostTelemetrySha256": "B565AB2D027103F2B2FB5F19DAA1DC5D3674344BEAC4882446EB396E3F2D8568"
+    }
+  ],
+  "boundaries": [
+    "No model or provider calls",
+    "No full child-process command lifecycle coverage",
+    "No Linux VM scenario or multi-project integration evidence",
+    "No generalization, task-quality, user-benefit, or learning claim",
+    "Windows host lacked external-egress baseline, so external block was not independently probed"
+  ],
+  "privateRawArchive": "local-only; see adjacent private archive index outside Git"
+}

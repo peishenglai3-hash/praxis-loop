@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { buildExplorationPrompt } from "./exploration.js";
 import { assertCleanRepository, captureDiff, createWorktree, headCommit, removeWorktree, repositoryId, repositoryRoot, verifyWorktreeBase } from "./git.js";
@@ -72,9 +73,9 @@ function modelTaskView(task: TaskSpec): Record<string, unknown> {
   };
 }
 
-async function artifact(controlPath: string, name: string, contents: string | Buffer): Promise<ArtifactRef> {
+async function artifact(controlPath: string, name: string, contents: string | Buffer, immutable = false): Promise<ArtifactRef> {
   const path = join(controlPath, name);
-  await writeFile(path, contents);
+  await writeFile(path, contents, immutable ? { flag: "wx" } : {});
   return { path, sha256: sha256(contents), bytes: Buffer.byteLength(contents) };
 }
 
@@ -122,7 +123,7 @@ function parsePlan(text: string, maxSteps: number): Plan {
 
 function checkStatus(result: CommandResult): "pass" | "fail" | "unknown" {
   if (result.exitCode === 0 && !result.timedOut && result.signal === null) return "pass";
-  if (result.exitCode !== null && result.exitCode !== 0 && !result.timedOut) return "fail";
+  if (result.exitCode !== null && result.exitCode !== 0 && !result.timedOut && result.signal === null) return "fail";
   return "unknown";
 }
 
@@ -133,27 +134,45 @@ async function verify(
   worktreePath: string,
   controlPath: string,
   deadline: number,
+  round: number,
   signal?: AbortSignal,
 ): Promise<VerificationResult> {
   if (!verifyWorktreeBase(worktreePath, task.baseCommit)) throw new Error("Worktree HEAD changed from the pinned task base");
+  const before = captureDiff(worktreePath, task.baseCommit);
   const checkHash = sha256(JSON.stringify(task.acceptance));
   const checks: VerificationResult["checks"] = [];
+  let integrityChanged = false;
   for (const [index, command] of task.acceptance.entries()) {
     const remaining = deadline - Date.now();
-    if (remaining <= 0 || signal?.aborted) {
-      const unavailable: CommandResult = { executable: command.executable, args: command.args, cwd: worktreePath, exitCode: null, signal: "deadline", stdout: "", stderr: "Run deadline elapsed before this fixed check started", timedOut: true, durationMs: 0 };
-      checks.push({ command, result: unavailable, status: "unknown" });
-      continue;
+    const checkBefore = captureDiff(worktreePath, task.baseCommit);
+    const baseBefore = verifyWorktreeBase(worktreePath, task.baseCommit);
+    let result: CommandResult;
+    if (remaining <= 0 || signal?.aborted || integrityChanged || !baseBefore || checkBefore.hash !== before.hash) {
+      integrityChanged ||= !baseBefore || checkBefore.hash !== before.hash;
+      result = { executable: command.executable, args: command.args, cwd: worktreePath, exitCode: null, signal: signal?.aborted ? "ABORT_ERR" : remaining <= 0 ? "deadline" : null, stdout: "", stderr: integrityChanged ? "Fixed check not started because the verification input changed" : "Run cancelled or deadline elapsed before this fixed check started", timedOut: remaining <= 0, durationMs: 0 };
+    } else {
+      try { result = await adapter.execute(command, worktreePath, remaining, signal); }
+      catch (error) {
+        result = { executable: command.executable, args: command.args, cwd: worktreePath, exitCode: null, signal: null, stdout: "", stderr: `Acceptance adapter failed: ${String(error)}`, timedOut: false, durationMs: 0 };
+      }
     }
-    const result = await adapter.execute(command, worktreePath, remaining, signal);
-    const log = await artifact(controlPath, `check-${index + 1}.log`, `COMMAND ${JSON.stringify([command.executable, ...command.args])}\nEXIT ${String(result.exitCode)} SIGNAL ${String(result.signal)} TIMEOUT ${result.timedOut}\n\nSTDOUT\n${result.stdout}\n\nSTDERR\n${result.stderr}`);
-    checks.push({ command, result: { ...result, stdout: tail(result.stdout), stderr: tail(result.stderr) }, status: checkStatus(result) });
-    store.appendEvent(task.repositoryId, "run.check", { index, command, result: { exitCode: result.exitCode, signal: result.signal, timedOut: result.timedOut, durationMs: result.durationMs }, log, fixedAcceptanceSha256: checkHash }, task.id);
+    const checkAfter = captureDiff(worktreePath, task.baseCommit);
+    const baseAfter = verifyWorktreeBase(worktreePath, task.baseCommit);
+    integrityChanged ||= !baseAfter || checkAfter.hash !== before.hash;
+    const status = integrityChanged ? "unknown" : checkStatus(result);
+    const log = await artifact(controlPath, `verification-round-${round}-check-${index + 1}.log`, `COMMAND ${JSON.stringify([command.executable, ...command.args])}\nEXIT ${String(result.exitCode)} SIGNAL ${String(result.signal)} TIMEOUT ${result.timedOut}\n\nSTDOUT\n${result.stdout}\n\nSTDERR\n${result.stderr}`, true);
+    checks.push({ command, result: { ...result, stdout: tail(result.stdout), stderr: tail(result.stderr) }, status });
+    store.appendEvent(task.repositoryId, "run.check", { round, index, command, status, result: { exitCode: result.exitCode, signal: result.signal, timedOut: result.timedOut, durationMs: result.durationMs }, log, fixedAcceptanceSha256: checkHash, beforeDiffHash: checkBefore.hash, afterDiffHash: checkAfter.hash, baseBefore, baseAfter }, task.id);
   }
   const diff = captureDiff(worktreePath, task.baseCommit);
+  const baseVerified = verifyWorktreeBase(worktreePath, task.baseCommit);
+  integrityChanged ||= !baseVerified || diff.hash !== before.hash;
   const failed = checks.some((check) => check.status === "fail");
-  const unknown = checks.some((check) => check.status === "unknown");
-  return { status: failed ? "fail" : unknown ? "unknown" : "pass", checks, diffHash: diff.hash };
+  const unknown = integrityChanged || checks.some((check) => check.status === "unknown");
+  const verification: VerificationResult = { status: unknown ? "unknown" : failed ? "fail" : "pass", checks, diffHash: before.hash };
+  const summary = await artifact(controlPath, `verification-round-${round}.json`, JSON.stringify({ round, baseCommit: task.baseCommit, baseVerified, fixedAcceptanceSha256: checkHash, beforeDiffHash: before.hash, afterDiffHash: diff.hash, integrityChanged, verification: serializeVerification(verification) }, null, 2), true);
+  store.appendEvent(task.repositoryId, "run.verification", { round, summary, baseVerified, beforeDiffHash: before.hash, afterDiffHash: diff.hash, fixedAcceptanceSha256: checkHash, status: verification.status }, task.id);
+  return verification;
 }
 
 function serializeVerification(result: VerificationResult): unknown {
@@ -253,6 +272,7 @@ export async function runTask(
     deadlineMs: TOTAL_BUDGET_MS,
   };
   await mkdir(controlPath, { recursive: true });
+  await artifact(controlPath, "owner.json", JSON.stringify({ pid: process.pid, hostname: hostname(), startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString() }, null, 2), true);
   await writeFile(join(controlPath, "task.json"), JSON.stringify(task, null, 2));
   const worktreePath = await createWorktree(root, runId, baseCommit);
   try { store.createRun(task, worktreePath); }
@@ -286,9 +306,18 @@ export async function runTask(
       "MEMORY_EVIDENCE_JSON:", JSON.stringify(memoryEvidence(memories), null, 2),
     ].join("\n");
     const plannerArtifact = await artifact(controlPath, "planner.prompt.txt", planPrompt);
-    const plannerResult = await model.generate({ purpose: "plan", prompt: planPrompt, cwd: worktreePath, writable: false, timeoutMs: Math.min(MAX_CALL_MS, deadline - Date.now()), signal: controller.signal });
+    let plannerResult: CommandResult;
+    try {
+      plannerResult = await model.generate({ purpose: "plan", prompt: planPrompt, cwd: worktreePath, writable: false, timeoutMs: Math.min(MAX_CALL_MS, deadline - Date.now()), signal: controller.signal });
+    } catch (error) {
+      store.appendEvent(repoId, "run.planner.error", { plannerPrompt: plannerArtifact, error: String(error) }, runId);
+      throw error;
+    }
+    modelInterrupted ||= plannerResult.timedOut || plannerResult.signal !== null || plannerResult.exitCode === null;
+    const planArtifact = await artifact(controlPath, "planner.output.txt", plannerResult.stdout, true);
+    const plannerStderr = await artifact(controlPath, "planner.stderr.txt", plannerResult.stderr, true);
+    store.appendEvent(repoId, "run.planner.result", { plannerPrompt: plannerArtifact, plannerOutput: planArtifact, plannerStderr, exitCode: plannerResult.exitCode, signal: plannerResult.signal, timedOut: plannerResult.timedOut, durationMs: plannerResult.durationMs }, runId);
     const planText = requireCommandResult(plannerResult, "Planner");
-    const planArtifact = await artifact(controlPath, "planner.output.txt", planText);
     plan = parsePlan(planText, task.maxSteps);
     store.updateRun(runId, "executing", "run.plan", { plan, plannerPrompt: plannerArtifact, plannerOutput: planArtifact, model: plannerResult.executable, durationMs: plannerResult.durationMs });
 
@@ -301,7 +330,7 @@ export async function runTask(
     const executionText = execution.stdout || execution.stderr;
     const executionOutput = await artifact(controlPath, "executor.output.txt", executionText);
     store.updateRun(runId, "verifying", "run.execution", { prompt: executionPromptArtifact, output: executionOutput, exitCode: execution.exitCode, signal: execution.signal, timedOut: execution.timedOut, durationMs: execution.durationMs });
-    verification = await verify(store, commandAdapter, task, worktreePath, controlPath, deadline, controller.signal);
+    verification = await verify(store, commandAdapter, task, worktreePath, controlPath, deadline, 1, controller.signal);
 
     if ((verification.status === "fail" || !executorSucceeded) && task.correctionCycles > 0 && Date.now() < deadline && !controller.signal.aborted) {
       let explorationSummary: unknown = { kind: "noProposal", reason: "exploration disabled" };
@@ -377,14 +406,20 @@ export async function runTask(
         modelInterrupted ||= repair.timedOut || repair.signal !== null || repair.exitCode === null;
         const repairOutput = await artifact(controlPath, "repair.output.txt", repair.stdout || repair.stderr);
         store.updateRun(runId, "verifying", "run.repair", { prompt: repairPromptArtifact, output: repairOutput, exitCode: repair.exitCode, signal: repair.signal, timedOut: repair.timedOut, durationMs: repair.durationMs });
-        verification = await verify(store, commandAdapter, task, worktreePath, controlPath, deadline, controller.signal);
+        verification = await verify(store, commandAdapter, task, worktreePath, controlPath, deadline, 2, controller.signal);
       }
     }
 
     const finalCapture = captureDiff(worktreePath, baseCommit);
+    const finalBaseVerified = verifyWorktreeBase(worktreePath, baseCommit);
+    const finalMatchesVerification = finalBaseVerified && finalCapture.hash === verification.diffHash;
+    if (!finalMatchesVerification) {
+      verification = { ...verification, status: "unknown" };
+      detail = "Final worktree base or diff no longer matches the verified version";
+    }
     const diffArtifact = await artifact(controlPath, "diff.patch", finalCapture.patch);
     const finalStatus = controller.signal.aborted || modelInterrupted || verification.status === "unknown" ? "interrupted" : detail ? "needs_input" : verification.status === "pass" && executorSucceeded ? "completed" : "failed";
-    const outcomeEvent = store.updateRun(runId, finalStatus, "run.outcome", { verification: serializeVerification(verification), diff: diffArtifact, worktreeStatus: finalCapture.status, detail: detail ?? null, executorSucceeded, interrupted: controller.signal.aborted || modelInterrupted }, finalCapture.hash);
+    const outcomeEvent = store.updateRun(runId, finalStatus, "run.outcome", { verification: serializeVerification(verification), diff: diffArtifact, worktreeStatus: finalCapture.status, detail: detail ?? null, executorSucceeded, interrupted: controller.signal.aborted || modelInterrupted, finalBaseVerified, finalMatchesVerification }, finalCapture.hash);
     const decisionId = randomUUID();
     const decisionBody = [
       `Task: ${truncateUtf8(task.prompt, 4000)}`,
@@ -402,11 +437,14 @@ export async function runTask(
     let finalCapture: ReturnType<typeof captureDiff>;
     try { finalCapture = captureDiff(worktreePath, baseCommit); }
     catch { finalCapture = { patch: Buffer.alloc(0), hash: sha256(""), status: "unknown\n" }; }
+    let finalBaseVerified = false;
+    try { finalBaseVerified = verifyWorktreeBase(worktreePath, baseCommit); } catch { /* Git metadata may be unavailable. */ }
+    if (!finalBaseVerified || verification.diffHash !== finalCapture.hash) verification = { ...verification, status: "unknown" };
     const diffArtifact = await artifact(controlPath, "diff.patch", finalCapture.patch);
-    const status = controller.signal.aborted || /timed out|deadline|ABORT_ERR|SIGINT|SIGTERM/iu.test(detail) ? "interrupted" : "failed";
+    const status = controller.signal.aborted || modelInterrupted || /timed out|deadline|ABORT_ERR|SIGINT|SIGTERM/iu.test(detail) ? "interrupted" : "failed";
     let outcomeEvent: string;
     try {
-      outcomeEvent = store.updateRun(runId, status, "run.outcome", { detail, verification: serializeVerification(verification), diff: diffArtifact, worktreeStatus: finalCapture.status, interrupted: status === "interrupted" }, finalCapture.hash);
+      outcomeEvent = store.updateRun(runId, status, "run.outcome", { detail, verification: serializeVerification(verification), diff: diffArtifact, worktreeStatus: finalCapture.status, interrupted: status === "interrupted", finalBaseVerified }, finalCapture.hash);
     } catch {
       outcomeEvent = store.appendEvent(repoId, "run.error", { detail, verification: serializeVerification(verification), diff: diffArtifact }, runId);
     }

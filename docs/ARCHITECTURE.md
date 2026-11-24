@@ -41,7 +41,16 @@ These are design prompts, not empirical evidence that the software operationaliz
 - Approval changes retrieval eligibility; it does not certify that a reflection is true.
 - Revisions supersede the prior record and invalidate memories that cite the superseded source. Revoke does the same for the revoked source.
 - Search uses SQLite FTS5 when present and a bounded lexical fallback otherwise. It is not semantic search.
+- Reopen validation reads the FTS projection once and compares IDs/terms linearly; `memory_id` is not indexed by FTS5, so joining through that column made a 10k-memory reopen take about 25 seconds in the Windows pilot. The linear check reduced the measured mean to 0.58 seconds in that same profile.
 - Recorded exposure is not evidence of adoption. The runtime does not claim the model learned from an event.
+
+## Recovery and evaluation evidence
+
+- Events remain the persisted record; memory rows, scopes, FTS entries, and the search cursor are rebuildable projections. The explicit projection-rebuild operation recreates those derived tables in a transaction and replays the event ledger without rewriting events or runs.
+- Verification artifacts are separated by round. Each result records the fixed-check hash, base commit, before/after diff hashes, and a summary artifact. The final outcome checks that the worktree still matches the version that was verified.
+- The per-run owner record contains the process ID, host name, and start time to help inspect interrupted runs. Artifact hashes and exclusive file creation make accidental overwrites detectable; they do not provide tamper-proof storage.
+- PRAXIS_LOOP_STATE_DIR is an isolated test override. Use a fresh study-scoped path in the dedicated VM; do not point a personal runtime at test state.
+- Test admission checks are described in the [staged evaluation protocol](EXPERIMENT-PROTOCOL.md). The Windows AppContainer is used only for its documented offline subset; it shares the host kernel and is not a substitute for a disposable VM for full process-runner and model-backed stages.
 
 ## Known limits
 

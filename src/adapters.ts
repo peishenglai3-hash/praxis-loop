@@ -169,7 +169,12 @@ export class ShellCommandAdapter implements CommandAdapter {
 function codexInvocation(): { executable: string; prefix: string[] } {
   const configured = process.env.CODEX_EXECUTABLE;
   const requested = configured || "codex";
-  if (process.platform !== "win32") return { executable: requested, prefix: [] };
+  if (process.platform !== "win32") {
+    if (isAbsolute(requested) && /\.(?:[cm]?js)$/i.test(requested)) {
+      return { executable: process.execPath, prefix: [resolve(requested)] };
+    }
+    return { executable: requested, prefix: [] };
+  }
   const fromShim = (shim: string): { executable: string; prefix: string[] } => {
     if (!/^codex\.(?:cmd|ps1)$/i.test(basename(shim))) {
       throw new Error("CODEX_EXECUTABLE script must be a standard npm codex.cmd/codex.ps1 shim, or use codex.exe");
