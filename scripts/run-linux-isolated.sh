@@ -41,7 +41,7 @@ docker create \
   --env PRAXIS_LOOP_EVIDENCE_DIR=/tmp/evidence \
   --env PRAXIS_LOOP_DOCKER_ISOLATION_VERIFIED=1 \
   --env PRAXIS_LOOP_SOURCE_COMMIT="$source_commit" \
-  "$image" sh -c 'mkdir -p /tmp/evidence && exec node scripts/launch-evaluation.mjs mechanism' >/dev/null
+  "$image" >/dev/null
 created=1
 network_mode="$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$container")"
 host_mount_types="$(docker inspect --format '{{range .Mounts}}{{if or (eq .Type "bind") (eq .Type "volume")}}{{.Type}}{{end}}{{end}}' "$container")"
@@ -67,13 +67,34 @@ fi
 printf '{"schemaVersion":1,"runnerEnvironment":"github-hosted","imageId":"%s","sourceCommit":"%s","networkMode":"%s","hostMountTypes":[],"user":"%s","readOnlyRoot":%s,"memoryBytes":%s,"nanoCpus":%s,"pidsLimit":%s,"capDrop":%s,"tmpfsTmp":"%s","tmpfsHome":"%s"}\n' \
   "$image_id" "$source_commit" "$network_mode" "$container_user" "$read_only_root" "$memory_limit" "$cpu_limit" "$pids_limit" "$cap_drop" "$tmpfs_tmp" "$tmpfs_home" > "$out/isolation.json"
 docker start "$container" >/dev/null
-container_status="$(docker wait "$container")"
+evaluation_complete=0
+for ((attempt = 0; attempt < 420; attempt++)); do
+  if docker exec "$container" test -f /tmp/evidence/.evaluation-complete >/dev/null 2>&1; then
+    evaluation_complete=1
+    break
+  fi
+  if [[ "$(docker inspect --format '{{.State.Running}}' "$container")" != true ]]; then
+    break
+  fi
+  sleep 5
+done
 docker logs --timestamps "$container" > "$out/console.log" 2>&1 || true
 cat "$out/console.log"
+copy_failed=0
+if [[ "$evaluation_complete" == 1 ]]; then
+  if ! docker cp "$container:/tmp/evidence/." "$out/"; then
+    printf 'Failed to copy sandbox evidence from the running container.\n' >&2
+    copy_failed=1
+  fi
+  docker exec "$container" touch /tmp/evidence/.release >/dev/null 2>&1 || true
+else
+  printf 'The isolated evaluator did not reach its completion marker before the 35-minute host deadline.\n' >&2
+  docker stop "$container" >/dev/null 2>&1 || true
+fi
+container_status="$(docker wait "$container")"
 printf '{"schemaVersion":1,"containerExitCode":%s,"sourceCommit":"%s","imageId":"%s"}\n' \
   "$container_status" "$source_commit" "$image_id" > "$out/container-result.json"
-if ! docker cp "$container:/tmp/evidence/." "$out/"; then
-  printf 'Failed to copy sandbox evidence from the completed container.\n' >&2
+if [[ "$evaluation_complete" != 1 || "$copy_failed" == 1 ]]; then
   exit 3
 fi
 printf '\nSandbox result: exit=%s evidence=%s\n' "$container_status" "$out"

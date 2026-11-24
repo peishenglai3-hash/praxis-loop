@@ -19,4 +19,4 @@ RUN --network=none pnpm run build \
 ENV HOME=/home/test
 ENV PRAXIS_LOOP_EVIDENCE_DIR=/tmp/evidence
 USER 10001:10001
-CMD ["node", "scripts/launch-evaluation.mjs", "mechanism"]
+CMD ["sh", "scripts/linux-container-evaluation.sh"]
