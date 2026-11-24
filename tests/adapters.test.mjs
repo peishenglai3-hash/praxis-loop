@@ -1,7 +1,7 @@
 import { assertSandbox } from './sandbox-guard.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, chmod, rm, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm, access } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -211,9 +211,8 @@ test('Codex adapter forwards argv/stdin to an offline fixture and collects its f
     await writeFile(entry, `const fs=require('node:fs');const args=process.argv.slice(2);let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify({args,input}));process.stdout.write('offline diagnostic');});\n`);
     executable = join(directory, 'fake-cli', 'codex.cmd');
   } else {
-    executable = join(directory, 'fake-codex');
-    await writeFile(executable, `#!${process.execPath}\nconst fs=require('node:fs');const args=process.argv.slice(2);let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify({args,input}));process.stdout.write('offline diagnostic');});\n`);
-    await chmod(executable, 0o700);
+    executable = join(directory, 'fake-codex.js');
+    await writeFile(executable, `const fs=require('node:fs');const args=process.argv.slice(2);let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify({args,input}));process.stdout.write('offline diagnostic');});\n`);
   }
   const previous = process.env.CODEX_EXECUTABLE;
   process.env.CODEX_EXECUTABLE = executable;
