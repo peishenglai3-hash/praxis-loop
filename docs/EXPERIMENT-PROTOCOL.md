@@ -1,6 +1,6 @@
 # Praxis Loop staged evaluation protocol
 
-**Status: protocol and guarded harness are implemented. A Windows AppContainer pilot has run for the in-process mechanism subset and bounded stability profile; the full mechanism suite and model-backed stages remain incomplete.** This protocol puts mechanism correctness and isolation before model-backed task trials, long-horizon use, and any cross-project integration. A later stage does not start while its predecessor has an unresolved safety, integrity, or data-loss issue.
+**Status: protocol and guarded harness are implemented. The full deterministic mechanism suite has passed in a GitHub-hosted, networkless Linux container; model-backed task trials, cross-project integration, and long-horizon task-quality evidence remain incomplete.** The Windows AppContainer results remain a separate, partial platform pilot. This protocol puts mechanism correctness and isolation before model-backed task trials, long-horizon use, and any cross-project integration. A later stage does not start while its predecessor has an unresolved safety, integrity, or data-loss issue.
 
 ## Evaluation questions
 
@@ -49,7 +49,7 @@ Run pnpm build, then run the complete pnpm test suite inside the VM. These check
 
 Fix one root cause at a time. Each discovered issue receives an issue record and a focused regression case before the suite is rerun in the VM. A local typecheck is not a substitute for these checks.
 
-On Windows, `scripts/run-windows-appcontainer.ps1 -Mode mechanism` currently runs only `search-exploration.test.mjs` and `store.test.mjs` through the AppContainer loader. These 16 tests cover retrieval, evidence selection, projection rebuild/replay, approval, revision, and revocation. The first `ShellCommandAdapter` test stalled at a redirected child-process spawn: the evaluator remained the sole active Job Object process beyond its 5-second command budget. Therefore `adapters.test.mjs` and `runner.test.mjs` are recorded as excluded and unverified; a passing Windows report is marked `partial`. The host separately verified child/grandchild creation and kill-on-job-close, but that does not verify adapter pipe capture, timeout, cancellation, Git/worktree, or end-to-end runner behavior. Keep those checks gated for a VM or another isolated runtime that supports the same process semantics.
+On Windows, `scripts/run-windows-appcontainer.ps1 -Mode mechanism` runs only `search-exploration.test.mjs` and `store.test.mjs` through the AppContainer loader. Those 16 tests cover retrieval, evidence selection, projection rebuild/replay, approval, revision, and revocation. The first `ShellCommandAdapter` test stalled at redirected child-process creation, so the Windows pilot remains `partial` and does not establish Windows adapter/runner behavior. The host separately verified child/grandchild creation and kill-on-job-close, but that does not verify adapter pipe capture, timeout, cancellation, Git/worktree, or end-to-end runner behavior. The equivalent full four-file suite has since run in the isolated Linux profile described above; retain the Windows limitation when interpreting platform-specific behavior.
 
 ### 2. Six-task paired pilot
 
@@ -122,8 +122,9 @@ The evaluator writes one bounded log and hash-bearing manifest per invocation. T
 
 ## Current status
 
-- Windows AppContainer mechanism evidence: the search/retrieval and store subset passed 16/16 tests. Adapter and runner suites remain unverified after a redirected-child-process stall in the isolated container.
+- GitHub-hosted Linux mechanism evidence: run `45406221237` evaluated all four mechanism files and passed 40/40 tests in a networkless, read-only container with no host mounts. The evidence manifest reports matching before/after source snapshot hashes and a clean snapshot after execution. The run exercises adapter, runner, retrieval/exploration, and store mechanisms; it makes no model calls.
+- Windows AppContainer mechanism evidence: the search/retrieval and store subset passed 16/16 tests. The Windows adapter/runner pilot remains partial after a redirected-child-process stall; the Linux pass does not establish Windows-specific process semantics.
 - Windows bounded stability: 1,000 memory cycles, 10 reopens, and 11 SQLite checks passed after an optimization to 10k-memory projection validation. This single local profile remains partial.
 - Windows state-only soak: the one-hour cycle phase completed and SQLite integrity checks passed. Its longest recorded write interval spans host sleep and is excluded from application latency evidence. The run remains partial.
-- The GitHub-hosted Linux mechanism workflow is configured; its first run is pending. Six-task/model evaluation, cross-project integration, and long-horizon task-quality evidence remain pending. No model calls were made in the completed Windows probes.
+- Six-task/model evaluation, cross-project integration, and long-horizon task-quality evidence remain pending. No model calls were made in the completed Windows or Linux mechanism runs.
 - The exact sanitized results, limits, and timing correction are frozen in [FROZEN-TEST-REFERENCE-2026-11-24.md](FROZEN-TEST-REFERENCE-2026-11-24.md); private raw logs are not stored in Git.
