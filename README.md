@@ -109,7 +109,7 @@ MIT. See [LICENSE](LICENSE).
 
 ## Frozen Windows test reference
 
-The 2026-11-24 Windows AppContainer subset, bounded stability, and exploratory soak results are frozen on branch `codex/freeze-windows-tests-20261124` and tag `reference/windows-tests-2026-11-24`. See [the report](docs/FROZEN-TEST-REFERENCE-2026-11-24.md) and [sanitized summary](test-evidence/reference-2026-11-24/summary.json). The sleep-contaminated timing was corrected; full runner and model stages remain open.
+The 2026-11-24 Windows AppContainer subset, bounded stability, and exploratory soak results are frozen on branch `codex/freeze-windows-tests-20261124` and tag `reference/windows-tests-2026-11-24`. See [the report](docs/FROZEN-TEST-REFERENCE-2026-11-24.md) and [sanitized summary](test-evidence/reference-2026-11-24/summary.json). The sleep-contaminated timing was corrected. The later Linux mechanism suite passed 40/40 in [GitHub Actions run 45407240845](https://github.com/peishenglai3-hash/praxis-loop/actions/runs/45407240845); its snapshot is frozen at tag `reference/linux-mechanism-2026-11-24`. Model-backed and long-horizon task-quality stages remain open.
 
 ## Isolated tests
 
