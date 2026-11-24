@@ -81,7 +81,7 @@ Model calls use the configured Codex CLI account/provider and send the task, rel
 
 ## Architecture and boundaries
 
-See [the architecture and theory boundaries](docs/ARCHITECTURE.md) and [the 18-run evaluation protocol](docs/EXPERIMENT-PROTOCOL.md). The planned study has not been run; this repository contains no real-task effectiveness claim.
+See [the architecture and theory boundaries](docs/ARCHITECTURE.md), [the staged evaluation protocol](docs/EXPERIMENT-PROTOCOL.md), and the [single evaluation issue ledger](docs/ISSUE-LEDGER.md). The planned study has not been run; this repository contains no real-task effectiveness claim.
 
 ## Development checks
 
@@ -90,8 +90,23 @@ corepack pnpm typecheck
 corepack pnpm build
 ```
 
-The CI workflow runs only those static checks and a production TypeScript build. It does not run an automated test suite.
+Model-backed and full process-runner tests require the dedicated Linux VM described in the evaluation protocol. Ordinary `pnpm test` commands remain guarded against running on the Windows host. The explicit offline wrapper below instead creates a temporary Windows AppContainer and never calls a model:
+
+- **pnpm test** runs the complete deterministic mechanism suite in the Linux VM.
+- **pnpm test:stability** runs bounded local state and resource cycles in an admitted sandbox.
+- **pnpm test:soak** runs a 24-hour Linux or one-hour Windows model-free endurance check.
+- **`scripts/run-windows-appcontainer.ps1 -Mode mechanism`** runs the documented 16-test in-process memory/retrieval subset. Its evidence is marked `partial`: adapter and runner suites remain unverified because redirected child-process spawning stalled inside this AppContainer.
+- **`scripts/run-windows-appcontainer.ps1 -Mode stability`** runs 1000 bounded local cycles without child-process samples; the host Job Object records evaluator handles, active-process count, and peak memory. This is not a VM or full command-lifecycle validation. The first completed profile exposed a quadratic FTS projection check; the linear validation fix reduced 10k-memory reopen time from 24.96 s to 0.58 s mean.
+- **`scripts/run-windows-appcontainer.ps1 -Mode soak`** is a one-hour exploratory state-only soak when the full Stage 1 gate is unavailable. Its result is partial and does not close the full endurance gate.
+
+The first Windows soak completed its one-hour cycle phase with valid SQLite checks, but recorded one unexplained 50-minute synchronous write during the 10k-memory seed. See [the issue ledger](docs/ISSUE-LEDGER.md) before treating that profile as endurance evidence.
+
+The stability and soak scripts use throwaway local state and make no model calls. The AppContainer sandbox shares the Windows kernel and does not claim VM-level isolation. The CI workflow continues to run static checks and a production TypeScript build.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Frozen Windows test reference
+
+The 2026-11-24 Windows AppContainer subset, bounded stability, and exploratory soak results are frozen on branch `codex/freeze-windows-tests-20261124` and tag `reference/windows-tests-2026-11-24`. See [the report](docs/FROZEN-TEST-REFERENCE-2026-11-24.md) and [sanitized summary](test-evidence/reference-2026-11-24/summary.json). The sleep-contaminated timing was corrected; full runner and model stages remain open.
