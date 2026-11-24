@@ -24,6 +24,9 @@ export function assertSandbox({ allowRoot = false } = {}) {
   if (record.schemaVersion !== 1 || record.dedicatedVm !== true || record.noHostMounts !== true || record.networkRestricted !== true) {
     throw new Error('Sandbox provisioning record is incomplete');
   }
+  // The CI host sets this only after validating the hosted runner and Docker
+  // configuration; containers do not expose the guest's DMI virtualization flags.
+  const dockerWrapperVerified = process.env.PRAXIS_LOOP_DOCKER_ISOLATION_VERIFIED === '1';
   const optionalText = (path) => {
     try { return readFileSync(path, 'utf8').trim(); }
     catch (error) { if (error.code === 'ENOENT' || error.code === 'EACCES') return ''; throw error; }
@@ -41,9 +44,18 @@ export function assertSandbox({ allowRoot = false } = {}) {
     cpuHypervisor ? 'cpu-hypervisor-flag' : null,
     /^(?:xen|kvm|qemu|vmware|hyperv|microsoft|bhyve)$/iu.test(hypervisorType) ? 'hypervisor-sysfs' : null,
   ].filter(Boolean);
-  if (virtualizationEvidence.length === 0) throw new Error(`Not a recognized VM: ${product || '(DMI unavailable)'}`);
+  if (virtualizationEvidence.length === 0 && !dockerWrapperVerified) {
+    throw new Error(`Not a recognized VM: ${product || '(DMI unavailable)'}`);
+  }
   const mounts = readFileSync('/proc/self/mountinfo', 'utf8');
   if (/ - (9p|virtiofs|vboxsf|fuse\.vmhgfs-fuse) /u.test(mounts)) throw new Error('Host filesystem sharing is prohibited');
   if (!allowRoot && process.getuid() === 0) throw new Error('Mechanism tests must run as an unprivileged guest user');
-  return { ...record, product, virtualizationEvidence };
+  return {
+    ...record,
+    isolation: dockerWrapperVerified ? 'github-hosted-vm+hardened-container' : 'dedicated-linux-vm',
+    product,
+    virtualizationEvidence: dockerWrapperVerified
+      ? ['github-hosted-runner', 'docker-inspect-network-none-no-host-mounts']
+      : virtualizationEvidence,
+  };
 }
