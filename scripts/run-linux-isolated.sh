@@ -82,8 +82,8 @@ docker logs --timestamps "$container" > "$out/console.log" 2>&1 || true
 cat "$out/console.log"
 copy_failed=0
 if [[ "$evaluation_complete" == 1 ]]; then
-  if ! docker cp "$container:/tmp/evidence/." "$out/"; then
-    printf 'Failed to copy sandbox evidence from the running container.\n' >&2
+  if ! docker exec "$container" tar -cf - -C /tmp/evidence . | tar -xf - -C "$out"; then
+    printf 'Failed to stream sandbox evidence from the running container.\n' >&2
     copy_failed=1
   fi
   docker exec "$container" touch /tmp/evidence/.release >/dev/null 2>&1 || true

@@ -1,7 +1,7 @@
 FROM node:24.15.0-bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends git ca-certificates tar \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install --global --ignore-scripts pnpm@11.19.0
 
